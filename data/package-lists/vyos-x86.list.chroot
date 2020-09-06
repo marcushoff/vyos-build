@@ -3,14 +3,7 @@ grub-pc
 qemu-guest-agent
 hyperv-daemons
 vyos-netplug
-vyos-smoketest
 vyos-xe-guest-utilities
 vyos-1x-vmware
 vyos-linux-firmware
-vyos-intel-i40e
-vyos-intel-i40evf
-vyos-intel-igb
-vyos-intel-ixgbe
-vyos-intel-ixgbevf
-vyos-intel-iavf
 vyos-intel-qat

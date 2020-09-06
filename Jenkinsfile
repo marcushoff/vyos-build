@@ -16,51 +16,11 @@
 
 @NonCPS
 
-def getGitBranchName() {
-    def branch = scm.branches[0].name
-    return branch.split('/')[-1]
-}
+// Using a version specifier library, use 'current' branch. The underscore (_)
+// is not a typo! You need this underscore if the line immediately after the
+// @Library annotation is not an import statement!
+@Library('vyos-build@current')_
 
-def getGitRepoURL() {
-    return scm.userRemoteConfigs[0].url
-}
-
-def getGitRepoName() {
-    return getGitRepoURL().split('/').last()
-}
-
-// Returns true if this is a custom build launched on any project fork.
-// Returns false if this is build from git@github.com:vyos/<reponame>.
-// <reponame> can be e.g. vyos-1x.git or vyatta-op.git
-def isCustomBuild() {
-    // GitHub organisation base URL
-    def gitURI = 'git@github.com:vyos/' + getGitRepoName()
-    def httpURI = 'https://github.com/vyos/' + getGitRepoName()
-
-    return ! ((getGitRepoURL() == gitURI) || (getGitRepoURL() == httpURI))
-}
-
-def setDescription() {
-    def item = Jenkins.instance.getItemByFullName(env.JOB_NAME)
-
-    // build up the main description text
-    def description = ""
-    description += "<h2>Build VyOS ISO image</h2>"
-
-    if (isCustomBuild()) {
-        description += "<p style='border: 3px dashed red; width: 50%;'>"
-        description += "<b>Build not started from official Git repository!</b><br>"
-        description += "<br>"
-        description += "Repository: <font face = 'courier'>" + getGitRepoURL() + "</font><br>"
-        description += "Branch: <font face = 'courier'>" + getGitBranchName() + "</font><br>"
-        description += "</p>"
-    } else {
-        description += "Sources taken from Git branch: <font face = 'courier'>" + getGitBranchName() + "</font><br>"
-    }
-
-    item.setDescription(description)
-    item.save()
-}
 
 // Only keep the 10 most recent builds
 def projectProperties = [
@@ -89,11 +49,7 @@ node('Docker') {
                 script {
                     dir('docker') {
                         sh """
-                            mkdir -p x86-64
-                            cp Dockerfile x86-64/Dockerfile
-                            cp entrypoint.sh x86-64/entrypoint.sh
-
-                            docker build -t ${env.DOCKER_IMAGE} x86-64
+                            docker build -t ${env.DOCKER_IMAGE} .
                         """
                         if ( ! isCustomBuild()) {
                             withDockerRegistry([credentialsId: "DockerHub"]) {
@@ -121,33 +77,29 @@ node('Docker') {
 //                  }
 //              }
 //          },
-//          'arm64': {
-//              script {
-//                  dir('docker') {
-//                      sh """
-//                          cp Dockerfile arm64/Dockerfile
-//                          cp entrypoint.sh arm64/entrypoint.sh
-//                          sed -i 's#^FROM.*#FROM multiarch/debian-debootstrap:arm64-buster-slim#' arm64/Dockerfile
-//                          docker build -t ${env.DOCKER_IMAGE_ARM64} arm64
-//
-//                      """
-//
-//                      if ( ! isCustomBuild()) {
-//                          withDockerRegistry([credentialsId: "DockerHub"]) {
-//                              sh "docker push ${env.DOCKER_IMAGE_ARM64}"
-//
-//                          }
-//                      }
-//                  }
-//              }
-//          }
+          'arm64': {
+              script {
+                  dir('docker') {
+                      sh """
+                          docker build -t ${env.DOCKER_IMAGE_ARM64} --build-arg ARCH=arm64v8/ .
+
+                      """
+
+                      if ( ! isCustomBuild()) {
+                          withDockerRegistry([credentialsId: "DockerHub"]) {
+                              sh "docker push ${env.DOCKER_IMAGE_ARM64}"
+
+                          }
+                      }
+                  }
+              }
+          }
         )
     }
 }
 
 pipeline {
     options {
-        skipDefaultCheckout()
         disableConcurrentBuilds()
         timeout(time: 120, unit: 'MINUTES')
         parallelsAlwaysFailFast()
@@ -168,11 +120,12 @@ pipeline {
             when {
                 beforeOptions true
                 beforeAgent true
+                // Do not run ISO build when the Docker container definition or the build pipeline
+                // library changes as this has no direct impact on the ISO image.
+                not { changeset "**/docker/*" }
+                not { changeset "**/vars/*" }
+                not { changeset "**/packages/*" }
                 anyOf {
-                    // Do not run ISO build when the Docker container definition or the build pipeline
-                    // library changes as this has no direct impact on the ISO image.
-                    not { changeset "**/docker/*" }
-                    not { changeset "**/vars/*" }
                     triggeredBy 'TimerTrigger'
                     triggeredBy cause: "UserIdCause"
                 }
@@ -188,24 +141,20 @@ pipeline {
                             --build-by autobuild@vyos.net \
                             --debian-mirror http://ftp.us.debian.org/debian/ \
                             --build-type release \
-                            --version 1.3-rolling-\$(date +%Y%m%d%H%M)
+                            --version 1.3-rolling-\$(date +%Y%m%d%H%M) \
+                            --custom-package "vyos-1x-smoketest"
                         sudo make iso
                     """
+
+                    if (fileExists('build/live-image-amd64.hybrid.iso') == false) {
+                        error('ISO build error')
+                    }
                 }
             }
         }
         stage('Test ISO') {
             when {
-                beforeOptions true
-                beforeAgent true
-                anyOf {
-                    // Do not run ISO build when the Docker container definition or the build pipeline
-                    // library changes as this has no direct impact on the ISO image.
-                    not { changeset "**/docker/*" }
-                    not { changeset "**/vars/*" }
-                    triggeredBy 'TimerTrigger'
-                    triggeredBy cause: "UserIdCause"
-                }
+                expression { fileExists 'build/live-image-amd64.hybrid.iso' }
             }
             steps {
                 sh "sudo make test"
@@ -219,37 +168,33 @@ pipeline {
                 if (isCustomBuild())
                     return
 
-                def ARCH = sh(returnStdout: true, script: "dpkg --print-architecture").trim()
-
-                // publish build result, using SSH-dev.packages.vyos.net Jenkins Credentials
-                sshagent(['SSH-dev.packages.vyos.net']) {
-                    // build up some fancy groovy variables so we do not need to write/copy
-                    // every option over and over again!
-                    def SSH_DIR = '/home/sentrium/web/downloads.vyos.io/public_html/rolling/' + getGitBranchName() + '/' + ARCH
-                    def SSH_OPTS = '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no'
-                    def SSH_REMOTE = 'khagen@10.217.48.113'
-
-                    // No need to explicitly check the return code. The pipeline
-                    // will fail if sh returns a non 0 exit code
-                    sh """
-                        ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c 'mkdir -p ${SSH_DIR}'"
-                        ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c 'find ${SSH_DIR} -type f -mtime +14 -exec rm -f {} \\;'"
-                        scp ${SSH_OPTS} build/vyos*.iso ${SSH_REMOTE}:${SSH_DIR}/
-                        ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c '/usr/bin/make-latest-rolling-symlink.sh'"
-                    """
-                }
-                //upload to S3
                 files = findFiles(glob: 'build/vyos*.iso')
                 if (files) {
+                    // publish build result, using SSH-dev.packages.vyos.net Jenkins Credentials
+                    sshagent(['SSH-dev.packages.vyos.net']) {
+                        // build up some fancy groovy variables so we do not need to write/copy
+                        // every option over and over again!
+                        def ARCH = sh(returnStdout: true, script: "dpkg --print-architecture").trim()
+                        def SSH_DIR = '/home/sentrium/web/downloads.vyos.io/public_html/rolling/' + getGitBranchName() + '/' + ARCH
+                        def SSH_OPTS = '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no'
+                        def SSH_REMOTE = 'khagen@10.217.48.113'
+
+                        // No need to explicitly check the return code. The pipeline
+                        // will fail if sh returns a non 0 exit code
+                        sh """
+                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c 'mkdir -p ${SSH_DIR}'"
+                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c 'find ${SSH_DIR} -type f -mtime +14 -exec rm -f {} \\;'"
+                            scp ${SSH_OPTS} build/vyos*.iso ${SSH_REMOTE}:${SSH_DIR}/
+                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c '/usr/bin/make-latest-rolling-symlink.sh'"
+                        """
+                    }
+
+                    // Upload to Amazon S3 storage
                     withAWS(region: 'us-east-1', credentials: 's3-vyos-downloads-rolling-rw') {
-                        s3Upload(bucket: 's3-us.vyos.io',
-                                 path: 'rolling/',
-                                 workingDir: 'build',
-                                 includePathPattern: 'vyos*.iso')
-                        s3Copy(fromBucket: 's3-us.vyos.io',
-                               fromPath: 'rolling/' + files[0].name,
-                               toBucket: 's3-us.vyos.io',
-                               toPath: 'rolling/vyos-rolling-latest.iso')
+                        s3Upload(bucket: 's3-us.vyos.io', path: 'rolling/',
+                                 workingDir: 'build', includePathPattern: 'vyos*.iso')
+                        s3Copy(fromBucket: 's3-us.vyos.io', fromPath: 'rolling/' + files[0].name,
+                               toBucket: 's3-us.vyos.io', toPath: 'rolling/vyos-rolling-latest.iso')
                     }
                 }
             }

@@ -12,6 +12,8 @@ systemctl disable lighttpd.service
 systemctl disable ssh.service
 systemctl disable openvpn.service
 systemctl disable lldpd.service
+systemctl disable LCDd.service
+systemctl disable lcdproc.service
 systemctl disable conntrackd.service
 systemctl disable mdns-repeater.service
 systemctl disable 'udp-broadcast-relay@*.service'
@@ -20,6 +22,8 @@ systemctl disable tftpd-hpa.service
 systemctl disable strongswan.service
 systemctl disable frr.service
 systemctl disable salt-minion.service
+systemctl disable certbot.service
+systemctl disable certbot.timer
 systemctl disable nginx.service
 systemctl disable pacemaker.service
 systemctl disable corosync.service
@@ -41,8 +45,11 @@ systemctl disable lm-sensors.service
 systemctl disable snmpd.service
 systemctl disable conserver-server.service
 systemctl disable dropbear.service
+systemctl disable fastnetmon.service
+systemctl disable ocserv.service
 
 echo I: Enabling services
 systemctl enable ssh-session-cleanup.service
 systemctl enable vyos-hostsd.service
 systemctl enable acpid.service
+systemctl enable vyos-configd.service
