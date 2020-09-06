@@ -35,10 +35,8 @@ def call(description=null, pkgList=null, buildCmd=null) {
            script {
                // create container name on demand
                def branchName = getGitBranchName()
-               // Adjust PR target branch name so we can re-map it to the proper
-               // Docker image. CHANGE_ID is set only for pull requests, so it is
-               // safe to access the pullRequest global variable
-               if (env.CHANGE_ID) {
+               // Adjust PR target branch name so we can re-map it to the proper Docker image. 
+               if (isPullRequest()) {
                    branchName = "${env.CHANGE_TARGET}".toLowerCase()
                }
                if (branchName.equals("master")) {
@@ -59,25 +57,17 @@ def call(description=null, pkgList=null, buildCmd=null) {
         environment {
             // get relative directory path to Jenkinsfile
             BASE_DIR = getJenkinsfilePath()
-            CHANGESET_DIR = "**/${env.BASE_DIR}*"
+            CHANGESET_DIR = getChangeSetPath()
             DEBIAN_ARCH = sh(returnStdout: true, script: 'dpkg --print-architecture').trim()
         }
         options {
             disableConcurrentBuilds()
+            skipDefaultCheckout()
             timeout(time: 60, unit: 'MINUTES')
             timestamps()
         }
         stages {
             stage('Fetch Source') {
-                when {
-                    beforeOptions true
-                    beforeAgent true
-                    anyOf {
-                        changeset "${env.CHANGESET_DIR}"
-                        triggeredBy 'TimerTrigger'
-                        triggeredBy cause: "UserIdCause"
-                    }
-                }
                 steps {
                     script {
                         // package build must be done in "any" subdir. Without it the Debian build system
@@ -91,16 +81,12 @@ def call(description=null, pkgList=null, buildCmd=null) {
                             def commitId = sh(returnStdout: true, script: 'git rev-parse --short=11 HEAD').trim()
                             currentBuild.description = sprintf('Git SHA1: %s', commitId[-11..-1])
 
-                            sh "pwd; ls -al"
-
                             if (pkgList) {
                                 // Fetch individual package source code, but only if a URL is defined, this will
                                 // let us reuse this script for packages like vyos-1x which ship a Jenkinfile in
                                 // their repositories root folder.
                                 pkgList.each { pkg ->
                                     dir(env.BASE_DIR + pkg.name) {
-                                        sh "pwd; ls -al"
-
                                         checkout([$class: 'GitSCM',
                                             doGenerateSubmoduleConfigurations: false,
                                             extensions: [[$class: 'CleanCheckout']],
@@ -118,7 +104,8 @@ def call(description=null, pkgList=null, buildCmd=null) {
                     beforeOptions true
                     beforeAgent true
                     anyOf {
-                        changeset "${env.CHANGESET_DIR}"
+                        changeset pattern: "${env.CHANGESET_DIR}"
+                        expression { isPullRequest() }
                         triggeredBy 'TimerTrigger'
                         triggeredBy cause: "UserIdCause"
                     }
@@ -132,7 +119,6 @@ def call(description=null, pkgList=null, buildCmd=null) {
                             if (pkgList) {
                                 pkgList.each { pkg ->
                                     dir(env.BASE_DIR + pkg.name) {
-                                        sh "pwd; ls -al"
                                         sh pkg.buildCmd
                                     }
                                 }
@@ -185,9 +171,7 @@ def call(description=null, pkgList=null, buildCmd=null) {
                                 if (env.DEBIAN_ARCH != 'all')
                                     ARCH_OPT = '-A ' + env.DEBIAN_ARCH
 
-                                sh "pwd; ls -al"
-
-                                files = findFiles(glob: '**/*.deb')
+                                files = findFiles(glob: '*.deb')
                                 if (files) {
                                     echo "Uploading package(s) and updating package(s) in the repository ..."
                                     files.each { FILE ->
@@ -197,11 +181,9 @@ def call(description=null, pkgList=null, buildCmd=null) {
                                         sh """
                                             ssh ${SSH_OPTS} ${SSH_REMOTE} -t "bash --login -c 'mkdir -p ${SSH_DIR}'"
                                             scp ${SSH_OPTS} ${FILE} ${SSH_REMOTE}:${SSH_DIR}/
-                                            ssh ${SSH_OPTS} ${SSH_REMOTE} "\
-                                                uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} ${ARCH_OPT} remove ${RELEASE} ${PKG}'; \
-                                                uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} deleteunreferenced'; \
-                                                uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} ${ARCH_OPT} includedeb ${RELEASE} ${SSH_DIR}/${FILE}'; \
-                                                "
+                                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} ${ARCH_OPT} remove ${RELEASE} ${PKG}'"
+                                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} deleteunreferenced'"
+                                            ssh ${SSH_OPTS} ${SSH_REMOTE} -t "uncron-add 'reprepro -v -b ${VYOS_REPO_PATH} ${ARCH_OPT} includedeb ${RELEASE} ${SSH_DIR}/${FILE}'"
                                         """
                                     }
                                 }

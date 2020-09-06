@@ -67,6 +67,9 @@ parser.add_argument('--logfile', help='Log to file')
 parser.add_argument('--no-kvm', help='Disable use of kvm',
 				action='store_true',
 				default=False)
+parser.add_argument('--configd', help='Execute testsuite with config daemon',
+				action='store_true',
+				default=False)
 
 args = parser.parse_args()
 
@@ -277,6 +280,16 @@ try:
     time.sleep(20)
 
     #################################################
+    # Start/stop config daemon
+    #################################################
+    if args.configd:
+        c.sendline('sudo systemctl start vyos-configd.service &> /dev/null')
+        c.expect(r'vyos@vyos:~\$')
+    else:
+        c.sendline('sudo systemctl stop vyos-configd.service &> /dev/null')
+        c.expect(r'vyos@vyos:~\$')
+
+    #################################################
     # Basic Configmode/Opmode switch
     #################################################
     log.info("Basic CLI configuration mode test")
@@ -291,11 +304,11 @@ try:
     #################################################
     log.info("Executing test-suite ")
 
-    c.sendline('sudo /usr/bin/vyos-smoketest')
+    c.sendline('/usr/bin/vyos-smoketest')
     i = c.expect(['\n +Invalid command:',
                       '\n +Set failed',
                       'No such file or directory',
-                      r'\n\S+@\S+[$#]'], timeout=1800)
+                      r'\n\S+@\S+[$#]'], timeout=3600)
 
     if i==0:
         raise Exception('Invalid command detected')

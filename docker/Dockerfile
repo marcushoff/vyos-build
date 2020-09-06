@@ -17,22 +17,26 @@
 # volume mapped in order to easy export images
 
 # This Dockerfile is installable on both x86, x86-64, armhf and arm64 systems
-# To install using  native cpu instructionset use the default docker `FROM` statement
-# (Use this to build on an x86/x86-64 pc/server and on an ARM system, eg. RaspberryPi)
-FROM debian:buster
+ARG ARCH=
+FROM ${ARCH}debian:buster
 
 # It is also possible to emulate an arm system inside docker,
 # execution of this emulated system needs to be executed on an x86 or x86-64 host.
 
-# To install an qemu emulated armhf or arm64 cpu comment out the default `FROM` statement
-# and use one of the following instead.
-# ARMHF:
-#FROM multiarch/debian-debootstrap:armhf-buster-slim
-# ARM64:
-#FROM multiarch/debian-debootstrap:arm64-buster-slim
+# To install using a non-native cpu instructionset use the `--build-arg ARCH=<ARCH>/`
+# Supported architectures:
+#     arm32v6/
+#     arm32v7/
+#     arm64v8/
+# Example bo byukd natively:
+#     docker build -t vyos-build:current .
+# Example to build on armhf:
+#     docker build -t vyos-build:current-armhf --build-arg ARCH=arm32v7/ .
+# Example to build on arm64:
+#     docker build -t vyos-build:current-arm64 --build-arg ARCH=arm64v8/ .
 
-# Prior of installing an emulated qemu build you need to install qemu, qemu-user-static
-# and register qemu inside docker using:
+# On some versions of docker the emulation framework is not installed by default and
+# you need to install qemu, qemu-user-static and register qemu inside docker manually using:
 # `docker run --rm --privileged multiarch/qemu-user-static:register --reset`
 
 
@@ -231,8 +235,15 @@ RUN apt-get update && apt-get install -y \
 
 # Packages needed for vyos-1x
 RUN apt-get update && apt-get install -y \
+      quilt \
       fakeroot \
-      whois
+      whois \
+      python3 \
+      python3-setuptools \
+      python3-xmltodict \
+      python3-lxml \
+      python3-nose \
+      python3-coverage
 
 # Packages needed for vyos-xe-guest-utilities
 RUN apt-get update && apt-get install -y \
@@ -278,7 +289,8 @@ RUN apt-get update && apt-get install -y \
       po-debconf \
       systemd \
       tzdata \
-      python-setuptools
+      python-setuptools \
+      python3-stdeb
 
 # Packages needed for vyos-opennhrp
 RUN apt-get update && apt-get install -y \
@@ -348,6 +360,10 @@ RUN apt-get update && apt-get install -y \
 # Packages needed for libnss-mapuser & libpam-radius
 RUN apt-get update && apt-get install -y \
       libaudit-dev
+
+# Packages needed for vyos-configd
+RUN apt-get update && apt-get install -y \
+      libzmq3-dev
 
 # Install packer
 RUN if dpkg-architecture -ii386 || dpkg-architecture -iamd64; then \
@@ -433,6 +449,16 @@ RUN wget https://salsa.debian.org/klausenbusk-guest/debootstrap/commit/a9a603b17
     dch -n "Applying fix for docker image compile" && \
     dpkg-buildpackage -us -uc && \
     sudo dpkg -i ../debootstrap*.deb
+
+#
+# fpm: a command-line program designed to help you build packages (e.g. deb)
+#
+RUN apt-get update && apt-get install -y \
+      ruby \
+      ruby-dev \
+      rubygems \
+      build-essential
+RUN gem install --no-document fpm
 
 # Allow password-less 'sudo' for all users in group 'sudo'
 RUN sed "s/^%sudo.*/%sudo\tALL=(ALL) NOPASSWD:ALL/g" -i /etc/sudoers && \
