@@ -191,6 +191,16 @@ RUN apt-get update && apt-get install -y \
       dkms \
       cdbs \
       cmake \
+      elfutils \
+      libdw-dev \
+      systemtap-sdt-dev \
+      libunwind-dev \
+      libslang2-dev \
+      python-dev \
+      libiberty-dev \
+      binutils-dev \
+      libnuma-dev \
+      libbabeltrace-dev \
       liblua5.2-dev \
       liblua5.3-dev
 
